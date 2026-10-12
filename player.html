@@ -944,8 +944,9 @@ async function playIndex(i,autoplay){
     const r=await api('/api/play/'+encodeURIComponent(item.id),{method:'POST'});
     if(my!==playToken)return;        // المستخدم بدّل لفيديو تاني وإحنا مستنيين
     if(!r?.success||!r?.data?.manifest_url)throw new Error('بيانات تشغيل الفيديو غير مكتملة');
-    let url=new URL(r.data.manifest_url,API).href;
-    if(token)url+=(url.includes('?')?'&':'?')+'token='+encodeURIComponent(token);
+    // توكن تشغيل منفصل عن توكن الحساب — مش بيتضاف في الـ URL
+    const streamToken=r.data.streamToken||'';
+    const url=new URL(r.data.manifest_url,API).href;
     const saved=readProgress(item.id);
     const resumeAt=saved&&saved.currentTime>2&&!saved.watched?+saved.currentTime:0;
     applyRate();
@@ -963,7 +964,14 @@ async function playIndex(i,autoplay){
       hls=new Hls({
         enableWorker:true,maxBufferLength:30,maxMaxBufferLength:60,backBufferLength:15,
         startPosition:resumeAt||-1,capLevelToPlayerSize:true,
-        xhrSetup:x=>{if(token)x.setRequestHeader('Authorization','Bearer '+token)}
+        // X-Stream-Token للـ manifest فقط؛ المقاطع موقّعة من السيرفر ومش محتاجة توكن الحساب
+        xhrSetup:(xhr,reqUrl)=>{
+          try{
+            if(streamToken&&typeof reqUrl==='string'&&reqUrl.indexOf('/api/stream/manifest/')!==-1){
+              xhr.setRequestHeader('X-Stream-Token',streamToken);
+            }
+          }catch(_){}
+        }
       });
       hls.on(Hls.Events.MANIFEST_PARSED,()=>{
         if(my!==playToken)return;
@@ -976,7 +984,7 @@ async function playIndex(i,autoplay){
         if(my!==playToken||!d||!d.fatal)return;
         const code=d.response&&d.response.code;
         if(code===401||code===403){
-          showError('جلسة الدخول انتهت أو مفيش صلاحية لمشاهدة الفيديو ده.','انتهت الجلسة','leave');return;
+          showError('جلسة التشغيل انتهت أو مفيش صلاحية. افتح الفيديو من جديد.','انتهت الجلسة','leave');return;
         }
         if(d.type===Hls.ErrorTypes.NETWORK_ERROR){
           if(hlsRetry.net++<3){
@@ -995,7 +1003,10 @@ async function playIndex(i,autoplay){
       hls.loadSource(url);
       hls.attachMedia(video);
     }else{
-      video.src=url;
+      // Safari native HLS: streamToken في query للـ manifest فقط (مش توكن الحساب)
+      let nativeUrl=url;
+      if(streamToken)nativeUrl+=(nativeUrl.includes('?')?'&':'?')+'st='+encodeURIComponent(streamToken);
+      video.src=nativeUrl;
       video.addEventListener('canplay',()=>{
         if(my!==playToken)return;
         setLoading(false);
