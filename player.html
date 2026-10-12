@@ -1,4 +1,5 @@
 <!doctype html>
+<!-- Dorosak Plus Player — v1.1 (مهلة أطول + إعادة محاولة تلقائية للسيرفر) -->
 <html lang="ar" dir="rtl">
 <head>
 <meta charset="utf-8">
@@ -265,6 +266,8 @@ img{display:block;max-width:100%}
 .foot-btn:active{transform:scale(.97)}
 .foot-btn:disabled{opacity:.4;pointer-events:none}
 
+.vtag{margin-top:22px;text-align:center;font-size:10.5px;font-weight:700;color:var(--muted);opacity:.7;direction:ltr}
+
 /* ============ RESPONSIVE ============ */
 @media(max-width:900px){
   .layout{grid-template-columns:1fr;gap:16px}
@@ -479,6 +482,7 @@ img{display:block;max-width:100%}
       </div>
     </aside>
   </div>
+  <div class="vtag">Dorosak Plus Player · v1.1</div>
 </main>
 
 
@@ -569,20 +573,53 @@ function showError(t,title,action){
   setLoading(false);
 }
 function hideError(){$('error').classList.remove('show')}
+/* ⏱️ مهلة أطول + إعادة محاولة تلقائية (السيرفر تحت ضغط) */
+const API_TIMEOUT=30000;            // مهلة كل محاولة (30 ثانية)
+const API_TRIES=5;                  // عدد المحاولات
+const RETRY_STATUS=[408,425,429,500,502,503,504,520,521,522,524];
+function sleep(ms,signal){
+  return new Promise((res,rej)=>{
+    const t=setTimeout(res,ms);
+    if(signal)signal.addEventListener('abort',()=>{clearTimeout(t);const er=new Error('aborted');er.kind='abort';rej(er)},{once:true});
+  });
+}
 async function api(path,opts={}){
   const headers={Accept:'application/json',...(opts.headers||{})};
   if(token)headers.Authorization='Bearer '+token;
-  let r;
-  try{r=await fetch(API+path,{method:opts.method||'GET',headers,body:opts.body,cache:'no-store'})}
-  catch(e){const er=new Error('مفيش اتصال بالسيرفر. اتأكد من النت وجرّب تاني.');er.kind='network';throw er}
-  let d={};try{d=await r.json()}catch(e){}
-  if(!r.ok){
-    const er=new Error(d.message||`السيرفر رجّع خطأ (${r.status})`);
-    er.status=r.status;
-    if(r.status===401||r.status===403){er.kind='auth';er.message='جلسة الدخول انتهت أو مفيش صلاحية لمشاهدة الفيديو ده.'}
-    throw er;
+  const tries=opts.tries||API_TRIES,timeout=opts.timeout||API_TIMEOUT,sig=opts.signal;
+  let lastErr=null;
+  for(let a=1;a<=tries;a++){
+    if(sig&&sig.aborted){const er=new Error('aborted');er.kind='abort';throw er}
+    const ctrl=new AbortController();
+    let timedOut=false;
+    const tm=setTimeout(()=>{timedOut=true;ctrl.abort()},timeout);
+    const onAbort=()=>ctrl.abort();
+    if(sig)sig.addEventListener('abort',onAbort,{once:true});
+    let r=null,d={},netErr=null;
+    try{
+      r=await fetch(API+path,{method:opts.method||'GET',headers,body:opts.body,cache:'no-store',signal:ctrl.signal});
+      try{d=await r.json()}catch(e){}
+    }catch(e){netErr=e}
+    finally{clearTimeout(tm);if(sig)sig.removeEventListener('abort',onAbort)}
+    if(netErr){
+      if(sig&&sig.aborted){const er=new Error('aborted');er.kind='abort';throw er}
+      lastErr=new Error(timedOut?'السيرفر عليه ضغط ومردّش في الوقت المناسب. جرّب تاني بعد لحظات.':'مفيش اتصال بالسيرفر. اتأكد من النت وجرّب تاني.');
+      lastErr.kind='network';
+    }else if(!r.ok){
+      const er=new Error(d.message||`السيرفر رجّع خطأ (${r.status})`);
+      er.status=r.status;
+      if(r.status===401||r.status===403){er.kind='auth';er.message='جلسة الدخول انتهت أو مفيش صلاحية لمشاهدة الفيديو ده.';throw er}
+      if(!RETRY_STATUS.includes(r.status))throw er;
+      if(r.status>=500||r.status===429)er.message='السيرفر عليه ضغط حاليًا. جرّب تاني بعد لحظات.';
+      er.kind='busy';
+      lastErr=er;
+    }else return d;
+    if(a<tries){
+      if(opts.onRetry)try{opts.onRetry(a,tries)}catch(e){}
+      await sleep(Math.min(1000*a,5000)+Math.random()*400,sig);   // 1ث، 2ث، 3ث، 4ث + عشوائي بسيط
+    }
   }
-  return d;
+  throw lastErr||new Error('فشل الاتصال بالسيرفر');
 }
 function esc(s){
   return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -700,6 +737,7 @@ const RATES=[.5,.75,1,1.25,1.5,1.75,2,2.5,3];
 let rate=RATES.includes(+prefs.rate)?+prefs.rate:1;
 const rateLabel=x=>x+'×';
 let qualityIdx=-1,menuView='',menuClosedAt=0;
+let playAbort=null;
 let uiTimer=0,raf=0,scrub=null,playToken=0,hlsRetry={net:0,media:0},lastPtype='mouse',wakeLock=null;
 const hold={timer:0,active:false,x:0,y:0,endedAt:0};
 const tap={t:0,side:'',timer:0,seekUntil:0};
@@ -923,6 +961,8 @@ async function playIndex(i,autoplay){
   if(i<0||i>=videos.length)return;
   saveProgress();                      // احفظ مكان الفيديو القديم قبل ما نبدّل
   const my=++playToken;
+  if(playAbort){try{playAbort.abort()}catch(e){}}   // الغي طلب الفيديو القديم لو لسه شغال
+  playAbort=new AbortController();
   cleanup();
   current=i;pendingRestore=i;
   hlsRetry={net:0,media:0};
@@ -941,7 +981,12 @@ async function playIndex(i,autoplay){
   history.replaceState(null,'',`?lectureId=${encodeURIComponent(lectureId)}&videoId=${encodeURIComponent(item.id)}`);
   updateMediaSession();
   try{
-    const r=await api('/api/play/'+encodeURIComponent(item.id),{method:'POST'});
+    await sleep(150,playAbort.signal);   // تأخير بسيط: لو بتنقل بسرعة مبنبعتش طلب لكل فيديو
+    if(my!==playToken)return;
+    const r=await api('/api/play/'+encodeURIComponent(item.id),{
+      method:'POST',signal:playAbort.signal,
+      onRetry:(a,n)=>{if(my===playToken)setLoading(true,`السيرفر عليه ضغط… بحاول تاني (${a+1}/${n})`)}
+    });
     if(my!==playToken)return;        // المستخدم بدّل لفيديو تاني وإحنا مستنيين
     if(!r?.success||!r?.data?.manifest_url)throw new Error('بيانات تشغيل الفيديو غير مكتملة');
     let url=new URL(r.data.manifest_url,API).href;
@@ -963,6 +1008,10 @@ async function playIndex(i,autoplay){
       hls=new Hls({
         enableWorker:true,maxBufferLength:30,maxMaxBufferLength:60,backBufferLength:15,
         startPosition:resumeAt||-1,capLevelToPlayerSize:true,
+        /* مهل أطول وإعادة محاولات أكتر عشان ضغط السيرفر */
+        manifestLoadingTimeOut:25000,manifestLoadingMaxRetry:4,manifestLoadingRetryDelay:1000,manifestLoadingMaxRetryTimeout:8000,
+        levelLoadingTimeOut:25000,levelLoadingMaxRetry:4,levelLoadingRetryDelay:1000,levelLoadingMaxRetryTimeout:8000,
+        fragLoadingTimeOut:35000,fragLoadingMaxRetry:6,fragLoadingRetryDelay:1000,fragLoadingMaxRetryTimeout:10000,
         xhrSetup:x=>{if(token)x.setRequestHeader('Authorization','Bearer '+token)}
       });
       hls.on(Hls.Events.MANIFEST_PARSED,()=>{
@@ -979,14 +1028,14 @@ async function playIndex(i,autoplay){
           showError('جلسة الدخول انتهت أو مفيش صلاحية لمشاهدة الفيديو ده.','انتهت الجلسة','leave');return;
         }
         if(d.type===Hls.ErrorTypes.NETWORK_ERROR){
-          if(hlsRetry.net++<3){
-            setLoading(true,'النت ضعيف… بحاول تاني',false);
+          if(hlsRetry.net++<5){
+            setLoading(true,`السيرفر عليه ضغط… بحاول تاني (${hlsRetry.net}/5)`,false);
             setTimeout(()=>{
               if(my!==playToken||!hls)return;
               if(d.details===Hls.ErrorDetails.MANIFEST_LOAD_ERROR||d.details===Hls.ErrorDetails.MANIFEST_LOAD_TIMEOUT)hls.loadSource(url);
               else hls.startLoad();
-            },700*hlsRetry.net);
-          }else showError('النت ضعيف أو مقطوع. اتأكد من الاتصال وجرّب تاني.','مشكلة في الاتصال');
+            },Math.min(1000*hlsRetry.net,5000));
+          }else showError('السيرفر عليه ضغط أو النت ضعيف. استنى لحظات وجرّب تاني.','مشكلة في الاتصال');
         }else if(d.type===Hls.ErrorTypes.MEDIA_ERROR){
           if(hlsRetry.media++<2)hls.recoverMediaError();
           else showError('الفيديو مش بيشتغل على جهازك أو المتصفح ده. جرّب متصفح تاني.','تعذّر تشغيل الفيديو');
@@ -1005,9 +1054,10 @@ async function playIndex(i,autoplay){
       video.load();
     }
   }catch(e){
-    if(my!==playToken)return;
+    if(my!==playToken||e.kind==='abort')return;
     if(e.kind==='auth')showError(e.message,'انتهت الجلسة','leave');
     else if(e.kind==='network')showError(e.message,'مفيش اتصال');
+    else if(e.kind==='busy')showError(e.message,'السيرفر مشغول');
     else showError(e.message||'فشل تحميل الفيديو','تعذّر تحميل الفيديو');
   }
 }
