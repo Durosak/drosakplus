@@ -574,8 +574,8 @@ function showError(t,title,action){
 }
 function hideError(){$('error').classList.remove('show')}
 /* ⏱️ مهلة أطول + إعادة محاولة تلقائية (السيرفر تحت ضغط) */
-const API_TIMEOUT=30000;            // مهلة كل محاولة (30 ثانية)
-const API_TRIES=5;                  // عدد المحاولات
+const API_TIMEOUT=10000;            // مهلة أقصر حتى لا يظل المشغل معلقًا
+const API_TRIES=2;                  // محاولتان فقط لتقليل الضغط على السيرفر
 const RETRY_STATUS=[408,425,429,500,502,503,504,520,521,522,524];
 function sleep(ms,signal){
   return new Promise((res,rej)=>{
@@ -616,7 +616,7 @@ async function api(path,opts={}){
     }else return d;
     if(a<tries){
       if(opts.onRetry)try{opts.onRetry(a,tries)}catch(e){}
-      await sleep(Math.min(1000*a,5000)+Math.random()*400,sig);   // 1ث، 2ث، 3ث، 4ث + عشوائي بسيط
+      await sleep(700*a+Math.random()*250,sig);   // انتظار قصير بين المحاولات
     }
   }
   throw lastErr||new Error('فشل الاتصال بالسيرفر');
@@ -1006,12 +1006,13 @@ async function playIndex(i,autoplay){
     },{once:true});
     if(window.Hls&&Hls.isSupported()){
       hls=new Hls({
-        enableWorker:true,maxBufferLength:30,maxMaxBufferLength:60,backBufferLength:15,
-        startPosition:resumeAt||-1,capLevelToPlayerSize:true,
-        /* مهل أطول وإعادة محاولات أكتر عشان ضغط السيرفر */
-        manifestLoadingTimeOut:25000,manifestLoadingMaxRetry:4,manifestLoadingRetryDelay:1000,manifestLoadingMaxRetryTimeout:8000,
-        levelLoadingTimeOut:25000,levelLoadingMaxRetry:4,levelLoadingRetryDelay:1000,levelLoadingMaxRetryTimeout:8000,
-        fragLoadingTimeOut:35000,fragLoadingMaxRetry:6,fragLoadingRetryDelay:1000,fragLoadingMaxRetryTimeout:10000,
+        enableWorker:true,
+        /* مخزن أكبر لتقليل التقطيع أثناء المشاهدة */
+        maxBufferLength:60,maxMaxBufferLength:120,maxBufferSize:60*1000*1000,backBufferLength:30,
+        startFragPrefetch:true,startPosition:resumeAt||-1,capLevelToPlayerSize:true,
+        manifestLoadingTimeOut:12000,manifestLoadingMaxRetry:2,manifestLoadingRetryDelay:700,manifestLoadingMaxRetryTimeout:2500,
+        levelLoadingTimeOut:12000,levelLoadingMaxRetry:2,levelLoadingRetryDelay:700,levelLoadingMaxRetryTimeout:2500,
+        fragLoadingTimeOut:20000,fragLoadingMaxRetry:4,fragLoadingRetryDelay:1000,fragLoadingMaxRetryTimeout:5000,
         xhrSetup:x=>{if(token)x.setRequestHeader('Authorization','Bearer '+token)}
       });
       hls.on(Hls.Events.MANIFEST_PARSED,()=>{
@@ -1028,8 +1029,8 @@ async function playIndex(i,autoplay){
           showError('جلسة الدخول انتهت أو مفيش صلاحية لمشاهدة الفيديو ده.','انتهت الجلسة','leave');return;
         }
         if(d.type===Hls.ErrorTypes.NETWORK_ERROR){
-          if(hlsRetry.net++<5){
-            setLoading(true,`السيرفر عليه ضغط… بحاول تاني (${hlsRetry.net}/5)`,false);
+          if(hlsRetry.net++<2){
+            setLoading(true,`السيرفر عليه ضغط… بحاول تاني (${hlsRetry.net}/2)`,false);
             setTimeout(()=>{
               if(my!==playToken||!hls)return;
               if(d.details===Hls.ErrorDetails.MANIFEST_LOAD_ERROR||d.details===Hls.ErrorDetails.MANIFEST_LOAD_TIMEOUT)hls.loadSource(url);
