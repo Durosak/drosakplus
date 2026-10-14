@@ -505,8 +505,8 @@ var API_BASE=(window.DOROSAK_API_BASE||"https://player-production-2be7.up.railwa
 var S={api:"",token:"",me:null,yearId:26,subjectIds:[],stack:[],player:null,timer:null};
 /* اختيار السنة (2026 / 2027) بيظهر لشعبة علمي علوم بس — باقي الشعب بتدخل 2027 مباشرة */
 var YEARS=[
-  {id:26,label:"2026",name:"سنة 2026",desc:"مواد علمي علوم"},
-  {id:27,label:"2027",name:"سنة 2027",desc:"الدفعة الجديدة"}
+  {id:27,label:"2027",name:"سنة 2027",desc:"الدفعة الجديدة"},
+  {id:26,label:"2026",name:"سنة 2026",desc:"مواد علمي علوم"}
 ];
 /* ايدي الدفعة: 26 = 2026 · 27 = 2027 (القيم القديمة 3 و4 بتتحوّل تلقائي) */
 /* مواد 2026 (علمي علوم) متخزنة هنا — لما تدوس 26 بتتجاب من السيرفر مباشرة من غير لوحة التحكم.
@@ -620,19 +620,14 @@ function enterApp(){
 function resolveStartYear(){
   var avail=yearsForStudent();
   if(!avail.length){S.yearId=27;lsSet(LS_YEAR,"27");renderSubjects();return}
-  /* شعبة ملهاش 2026 → 2027 على طول */
+  /* شعبة سنة واحدة بس → ادخلها مباشرة (عادة 2027) */
   if(avail.length===1){
     S.yearId=avail[0].id;
     lsSet(LS_YEAR,String(S.yearId));
     renderSubjects();
     return;
   }
-  var saved=yearKey(lsGet(LS_YEAR));
-  if(saved&&avail.some(function(y){return y.id===saved})){
-    S.yearId=saved;
-    renderSubjects();
-    return;
-  }
+  /* أكتر من سنة: دايمًا شاشة الاختيار (27 فوق · 26 تحت) — من غير دخول تلقائي لـ 26 */
   renderYearPick();
 }
 function pickYear(id){
@@ -749,7 +744,11 @@ function renderSubjects(){
   }).then(function(res){
     var list=res.data||[];
     if(is26)list=year26List(list);   /* كل مواد 2026 بتظهر دايمًا */
-    else if(S.subjectIds.length)list=list.filter(function(s){return S.subjectIds.indexOf(String(s.id))!==-1});
+    else if(S.subjectIds.length)list=list.filter(function(s){
+      return S.subjectIds.indexOf(String(s.id))!==-1
+        || Number(s.id)>=9000000
+        || s._source==="thanawica";
+    });
     /* مفيش مواد لسنة 2026 → جرّب 2027 تلقائي */
     if(!list.length)return empty("لا توجد مواد","مفيش مواد للسنة دي لشعبتك · ارجع واختَر السنة التانية");
     var m=S.me||{},w=wstats(),hr=new Date().getHours(),left=Math.ceil(((m.expiresAt||0)-Date.now())/864e5),first=(m.name||"").split(" ")[0];
