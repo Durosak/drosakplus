@@ -934,7 +934,7 @@ function runHls(P){
   }).catch(function(e){if(!P.dead)perr(e.message||"فشل")});
 }
 
-var sa=API_BASE,st=lsGet(LS_TOKEN);
+var sa=API_BASE,st=lsGet(LS_TOKEN)||"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjo5MzA2Miwicm9sZSI6InN0dWRlbnQiLCJ1dWlkIjoiNWE5YTE4ZmU1NDZlMTE1NTNlMDQ2ZmFlM2UyYjE2MWYifQ.izWh_WEE5k55nRDwZpshxHNiXe1Be_V9wyGt32raVbw";
 if(st){
   S.api=sa;S.token=st;
   api("/api/auth/me").then(function(d){
