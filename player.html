@@ -1290,12 +1290,14 @@ function getYouTubeId(value){
   return null;
 }
 async function playIndex(i,autoplay){
-  if(i<0||i>=videos.length)return;
-  saveProgress();                      // احفظ مكان الفيديو القديم قبل ما نبدّل
+  if(i<0 || i>=videos.length) return;
+  saveProgress();
   const my=++playToken;
   cleanup();
-  current=i;pendingRestore=i;
+  current=i;
+  pendingRestore=i;
   hlsRetry={net:0,media:0};
+
   const item=videos[i];
   $('videoTitle').textContent=item.title;
   $('ptitle').textContent=item.title;
@@ -1308,180 +1310,194 @@ async function playIndex(i,autoplay){
   renderList();
   renderDrawer();
   renderStats();
-  const lst=$('videoList'),act=lst.querySelector('.item.active');
-  if(act)lst.scrollTop=Math.max(0,act.getBoundingClientRect().top-lst.getBoundingClientRect().top+lst.scrollTop-lst.clientHeight/2+act.clientHeight/2);
-  history.replaceState(null,'',`?lectureId=${encodeURIComponent(lectureId)}&videoId=${encodeURIComponent(item.id)}`);
+
+  const lst=$('videoList');
+  const act=lst.querySelector('.item.active');
+  if(act) lst.scrollTop=Math.max(0,
+    act.getBoundingClientRect().top-lst.getBoundingClientRect().top+
+    lst.scrollTop-lst.clientHeight/2+act.clientHeight/2
+  );
+
+  history.replaceState(null,'',
+    `?lectureId=${encodeURIComponent(lectureId)}&videoId=${encodeURIComponent(item.id)}`
+  );
   updateMediaSession();
+
   try{
     setLoading(true,'جاري طلب رابط التشغيل من السيرفر…');
-    const response = await api('/api/play/'+encodeURIComponent(item.id),{method:'POST'});
-    if(my!==playToken)return;
-    const s = response && response.data ? response.data : (response || {});
-    if(response && response.success === false) throw new Error(response.message || 'السيرفر رفض تشغيل الفيديو');
+    const response=await api('/api/play/'+encodeURIComponent(item.id),{method:'POST'});
+    if(my!==playToken) return;
+    const s=response && response.data ? response.data : (response||{});
+    if(response && response.success===false)
+      throw new Error(response.message||'السيرفر رفض تشغيل الفيديو');
 
-    // السيرفر هو المسؤول عن تجهيز الجلسة وقائمة HLS والمقاطع؛ لا نطلب مسارات المصدر مباشرة من المتصفح.
-    const youtubeSource = s.youtube_url || (s.type === 'youtube' ? (s.url || s.play_url || s.video_url) : null);
-    if(s.type === 'youtube' || youtubeSource){
+    const youtubeSource=s.youtube_url ||
+      (s.type==='youtube' ? (s.url||s.play_url||s.video_url) : null);
+    if(s.type==='youtube' || youtubeSource){
       const youtubeId=getYouTubeId(youtubeSource);
-      if(!youtubeId)throw new Error('السيرفر رجّع رابط YouTube غير صالح.');
+      if(!youtubeId) throw new Error('السيرفر رجّع رابط YouTube غير صالح.');
       $('screen').classList.add('youtube-mode');
       video.style.display='none';
       youtubeFrame.style.display='block';
-      youtubeFrame.onload=()=>{if(my===playToken){hideError();setLoading(false)}};
-      youtubeFrame.src='https://www.youtube-nocookie.com/embed/'+encodeURIComponent(youtubeId)+'?autoplay='+(autoplay?'1':'0')+'&playsinline=1&rel=0';
-      curManifest=null;ready=true;setLoading(false);hideError();showUI(true);
+      youtubeFrame.onload=()=>{
+        if(my===playToken){hideError();setLoading(false)}
+      };
+      youtubeFrame.src='https://www.youtube-nocookie.com/embed/'+
+        encodeURIComponent(youtubeId)+'?autoplay='+(autoplay?'1':'0')+
+        '&playsinline=1&rel=0';
+      curManifest=null;
+      ready=true;
+      setLoading(false);
+      hideError();
+      showUI(true);
       return;
     }
-    const manifestPath = s.manifest_url || s.play_url || s.url;
-    if(s.type === 'mp4' || s.mp4_url){
-      const mp4Url = s.mp4_url || s.play_url || s.url;
-      if(!mp4Url) throw new Error('السيرفر لم يرجّع رابط الفيديو');
-      video.src = /^https?:\/\//i.test(mp4Url) ? mp4Url : new URL(mp4Url, API).href;
-      curManifest = null;
-      const savedMp4 = readProgress(item.id);
-      const resumeMp4 = savedMp4 && savedMp4.currentTime > 2 && !savedMp4.watched ? +savedMp4.currentTime : 0;
-      video.addEventListener('loadedmetadata',function(){
-        if(my!==playToken)return;
-        if(resumeMp4 && Number.isFinite(video.duration) && resumeMp4 < video.duration-2) video.currentTime=resumeMp4;
-        ready=true; applyRate(); paintProgress(); setLoading(false);
-      },{once:true});
-      video.play().catch(()=>{});
-    }else{
-      if(!manifestPath) throw new Error('السيرفر لم يرجّع manifest_url أو play_url');
-      let manifestUrl = /^https?:\/\//i.test(manifestPath) ? manifestPath : new URL(manifestPath, API).href;
-      // Native HLS (Safari/iOS) cannot set Authorization headers; the backend accepts this session token query.
-      if(token && manifestUrl.indexOf(API)===0 && !/[?&]token=/.test(manifestUrl)) {
-        manifestUrl += (manifestUrl.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(token);
-      }
-      const savedForManifest = readProgress(item.id);
-      const resumeForManifest = savedForManifest && savedForManifest.currentTime > 2 && !savedForManifest.watched ? +savedForManifest.currentTime : 0;
-      curManifest={url:manifestUrl,title:item.title,id:item.id,sessionId:s.session||null,swVideoId:s.video_id||s.sw_video_id||null};
-      dlHook();
-      applyRate();
-      video.addEventListener('loadedmetadata',function(){
-        if(my!==playToken)return;
-        if(resumeForManifest && Number.isFinite(video.duration) && resumeForManifest < video.duration-2){
-          video.currentTime=resumeForManifest;
-          showToast('كمّلنا من '+fmt(resumeForManifest));
-        }
-        ready=true; paintProgress();
-      },{once:true});
 
-      if(window.Hls && Hls.isSupported()){
-        hls=new Hls({
-          loader:createWorkerLoader(),enableWorker:false,maxBufferLength:30,maxMaxBufferLength:60,backBufferLength:15,
-          startPosition:resumeForManifest||-1,
-          xhrSetup:(x,u)=>{
-            if(token && u && u.indexOf('workers.dev')===-1 &&
-              (u.indexOf('/api/')!==-1 || u.indexOf(API)!==-1)){
-              x.setRequestHeader('Authorization','Bearer '+token);
-            }
-          }
-        });
-        hls.on(Hls.Events.MANIFEST_PARSED,()=>{
-          if(my!==playToken)return;
-          setLoading(false);
-          if(autoplay)video.play().catch(()=>{});
-          showUI(true);
-        });
-        hls.on(Hls.Events.FRAG_BUFFERED,()=>{hlsRetry.net=0});
-        hls.on(Hls.Events.ERROR,(_e,d)=>{
-          if(my!==playToken||!d||!d.fatal)return;
-          const code=d.response&&d.response.code;
-          if(code===401||code===403){
-            showHlsError('السيرفر رفض طلب التشغيل. اتأكد إن جلسة الطالب صالحة وإن الفيديو متاح لحسابك.','تعذّر تشغيل الفيديو',code===401?'leave':'retry');return;
-          }
-          if(d.type===Hls.ErrorTypes.NETWORK_ERROR){
-            if(hlsRetry.net++<3){
-              setLoading(true,'النت ضعيف… بحاول تاني',false);
-              setTimeout(()=>{
-                if(my!==playToken||!hls)return;
-                if(d.details===Hls.ErrorDetails.MANIFEST_LOAD_ERROR||d.details===Hls.ErrorDetails.MANIFEST_LOAD_TIMEOUT)hls.loadSource(manifestUrl);
-                else hls.startLoad();
-              },700*hlsRetry.net);
-            }else showHlsError('النت ضعيف أو مقطوع. اتأكد من الاتصال وجرّب تاني.','مشكلة في الاتصال');
-          }else if(d.type===Hls.ErrorTypes.MEDIA_ERROR){
-            if(hlsRetry.media++<2)hls.recoverMediaError();
-            else showHlsError('الفيديو مش بيشتغل على جهازك أو المتصفح ده. جرّب متصفح تاني.','تعذّر تشغيل الفيديو');
-          }else showHlsError('حصلت مشكلة أثناء تحميل الفيديو. جرّب تاني.','تعذّر تحميل الفيديو');
-        });
-        hls.loadSource(manifestUrl);
-        hls.attachMedia(video);
-      }else{
-        // Safari قد يشغّل HLS مباشرة، لكن المتصفحات التي تحتاج Authorization في المصدر لا يمكنها إرساله عبر video.src.
-        if(video.canPlayType('application/vnd.apple.mpegurl')){
-          video.src=manifestUrl;
-          video.play().catch(()=>{});
-        }else{
-          throw new Error('المتصفح لا يدعم تشغيل HLS؛ افتح الصفحة بمتصفح يدعم HLS.js.');
+    // MP4 له مسار مستقل حتى لا يتم إنشاء مشغل HLS بالخطأ.
+    if(s.type==='mp4' || s.mp4_url){
+      const mp4Url=s.mp4_url||s.play_url||s.url;
+      if(!mp4Url) throw new Error('السيرفر لم يرجّع رابط الفيديو');
+      const savedMp4=readProgress(item.id);
+      const resumeMp4=savedMp4 && savedMp4.currentTime>2 && !savedMp4.watched
+        ? +savedMp4.currentTime : 0;
+      curManifest=null;
+      video.src=/^https?:\/\//i.test(mp4Url) ? mp4Url : new URL(mp4Url,API).href;
+      video.addEventListener('loadedmetadata',()=>{
+        if(my!==playToken) return;
+        if(resumeMp4 && Number.isFinite(video.duration) && resumeMp4<video.duration-2){
+          try{video.currentTime=resumeMp4}catch(_){}
         }
-      }
+        ready=true;
+        applyRate();
+        paintProgress();
+        setLoading(false);
+      },{once:true});
+      if(autoplay) video.play().catch(()=>{});
+      else video.load();
+      return;
     }
 
+    // HLS manifest
+    const manifestPath=s.manifest_url||s.play_url||s.url;
+    if(!manifestPath) throw new Error('السيرفر لم يرجّع manifest_url أو play_url');
+    let manifestUrl=/^https?:\/\//i.test(manifestPath)
+      ? manifestPath : new URL(manifestPath,API).href;
+
+    if(token && manifestUrl.indexOf(API)===0 && !/[?&]token=/.test(manifestUrl))
+      manifestUrl+=(manifestUrl.includes('?')?'&':'?')+'token='+encodeURIComponent(token);
+
     const saved=readProgress(item.id);
-    const resumeAt=saved&&saved.currentTime>2&&!saved.watched?+saved.currentTime:0;
+    const resumeAt=saved && saved.currentTime>2 && !saved.watched
+      ? +saved.currentTime : 0;
+
+    curManifest={
+      url:manifestUrl,title:item.title,id:item.id,
+      sessionId:s.session||null,swVideoId:s.video_id||s.sw_video_id||null
+    };
+    dlHook();
     applyRate();
+
     video.addEventListener('loadedmetadata',()=>{
-      if(my!==playToken)return;
-      if(resumeAt&&Number.isFinite(video.duration)&&resumeAt<video.duration-2){
-        video.currentTime=resumeAt;
-        showToast('كمّلنا من '+fmt(resumeAt));
+      if(my!==playToken) return;
+      if(resumeAt && Number.isFinite(video.duration) && resumeAt<video.duration-2){
+        try{video.currentTime=resumeAt;showToast('كمّلنا من '+fmt(resumeAt))}catch(_){}
       }
-      applyRate();
       ready=true;
+      applyRate();
       paintProgress();
     },{once:true});
 
-    if(window.Hls&&Hls.isSupported()){
+    if(window.Hls && Hls.isSupported()){
+      // إصلاح أساسي: مشغل HLS واحد فقط لكل فيديو.
       hls=new Hls({
-        loader:createWorkerLoader(),enableWorker:false,maxBufferLength:30,maxMaxBufferLength:60,backBufferLength:15,
+        loader:createWorkerLoader(),
+        enableWorker:false,
+        capLevelToPlayerSize:true,
+        startLevel:-1,
+        maxBufferLength:30,
+        maxMaxBufferLength:60,
+        backBufferLength:15,
+        maxBufferHole:0.5,
+        manifestLoadingTimeOut:20000,
+        manifestLoadingMaxRetry:4,
+        manifestLoadingRetryDelay:1000,
+        levelLoadingTimeOut:20000,
+        levelLoadingMaxRetry:4,
+        levelLoadingRetryDelay:1000,
+        fragLoadingTimeOut:30000,
+        fragLoadingMaxRetry:6,
+        fragLoadingRetryDelay:1000,
         startPosition:resumeAt||-1,
-        xhrSetup:(x,u)=>{if(token&&u&&u.indexOf('workers.dev')===-1&&(u.indexOf('/api/')!==-1||(typeof API!=='undefined'&&u.indexOf(API)!==-1)))x.setRequestHeader('Authorization','Bearer '+token)}
+        xhrSetup:(x,u)=>{
+          if(token && u && u.indexOf('workers.dev')===-1 &&
+            (u.indexOf('/api/')!==-1 || u.indexOf(API)!==-1))
+            x.setRequestHeader('Authorization','Bearer '+token);
+        }
       });
+
       hls.on(Hls.Events.MANIFEST_PARSED,()=>{
-        if(my!==playToken)return;
+        if(my!==playToken) return;
         setLoading(false);
-        if(autoplay)video.play().catch(()=>{});
+        if(autoplay) video.play().catch(()=>{});
         showUI(true);
       });
-      hls.on(Hls.Events.FRAG_BUFFERED,()=>{hlsRetry.net=0});
+      hls.on(Hls.Events.FRAG_BUFFERED,()=>{
+        hlsRetry.net=0;
+        if(!video.paused) setLoading(false);
+      });
       hls.on(Hls.Events.ERROR,(_e,d)=>{
-        if(my!==playToken||!d||!d.fatal)return;
-        const code=d.response&&d.response.code;
+        if(my!==playToken || !d || !d.fatal) return;
+        const code=d.response && d.response.code;
         if(code===401){
-          showHlsError('جلسة الدخول انتهت أو مفيش صلاحية لمشاهدة الفيديو ده.','انتهت الجلسة','leave');return;
+          showHlsError('جلسة الدخول انتهت أو مفيش صلاحية لمشاهدة الفيديو ده.','انتهت الجلسة','leave');
+          return;
         }
         if(code===403){
-          showHlsError('السيرفر أو الـ CDN رفض تحميل مقطع الفيديو (403). جرّب من شبكة تانية أو حدّث الصفحة.','فشل تحميل المقطع');return;
+          showHlsError('السيرفر أو الـ CDN رفض تحميل مقطع الفيديو (403). جرّب من شبكة تانية أو حدّث الصفحة.','فشل تحميل المقطع');
+          return;
         }
         if(d.type===Hls.ErrorTypes.NETWORK_ERROR){
-          if(hlsRetry.net++<3){
-            setLoading(true,'النت ضعيف… بحاول تاني',false);
+          if(hlsRetry.net<4){
+            hlsRetry.net++;
+            const delay=Math.min(5000,800*Math.pow(2,hlsRetry.net-1));
+            setLoading(true,'الاتصال بطيء… جاري إعادة المحاولة',false);
             setTimeout(()=>{
-              if(my!==playToken||!hls)return;
-              if(d.details===Hls.ErrorDetails.MANIFEST_LOAD_ERROR||d.details===Hls.ErrorDetails.MANIFEST_LOAD_TIMEOUT)hls.loadSource(manifestUrl);
+              if(my!==playToken || !hls) return;
+              if(d.details===Hls.ErrorDetails.MANIFEST_LOAD_ERROR ||
+                 d.details===Hls.ErrorDetails.MANIFEST_LOAD_TIMEOUT)
+                hls.loadSource(manifestUrl);
               else hls.startLoad();
-            },700*hlsRetry.net);
-          }else showHlsError('النت ضعيف أو مقطوع. اتأكد من الاتصال وجرّب تاني.','مشكلة في الاتصال');
-        }else if(d.type===Hls.ErrorTypes.MEDIA_ERROR){
-          if(hlsRetry.media++<2)hls.recoverMediaError();
-          else showHlsError('الفيديو مش بيشتغل على جهازك أو المتصفح ده. جرّب متصفح تاني.','تعذّر تشغيل الفيديو');
-        }else showHlsError('حصلت مشكلة أثناء تحميل الفيديو. جرّب تاني.','تعذّر تحميل الفيديو');
+            },delay);
+          }else{
+            showHlsError('تعذّر جلب أجزاء الفيديو بعد عدة محاولات. قد يكون السبب سرعة الاتصال أو سيرفر الفيديو.','مشكلة في تحميل الفيديو');
+          }
+          return;
+        }
+        if(d.type===Hls.ErrorTypes.MEDIA_ERROR){
+          if(hlsRetry.media<2){hlsRetry.media++;hls.recoverMediaError()}
+          else showHlsError('حصل عطل في فك/تشغيل الفيديو. جرّب تحديث الصفحة أو متصفحًا آخر.','تعذّر تشغيل الفيديو');
+          return;
+        }
+        showHlsError('حصلت مشكلة أثناء تحميل الفيديو ('+(d.details||'خطأ غير معروف')+').','تعذّر تحميل الفيديو');
       });
+
       hls.loadSource(manifestUrl);
       hls.attachMedia(video);
+    }else if(video.canPlayType('application/vnd.apple.mpegurl')){
+      video.src=manifestUrl;
+      if(autoplay) video.play().catch(()=>{});
+      else video.load();
     }else{
-      showError('المتصفح لا يدعم HLS.js','تعذّر تشغيل الفيديو');
+      throw new Error('المتصفح لا يدعم تشغيل HLS؛ افتح الصفحة بمتصفح يدعم HLS.js.');
     }
   }catch(e){
-    if(my!==playToken)return;
+    if(my!==playToken) return;
     console.error(e);
-    if(e.kind==='auth')showError(e.message,'انتهت الجلسة','leave');
-    else if(e.kind==='network')showError(e.message,'مفيش اتصال');
+    if(e.kind==='auth') showError(e.message,'انتهت الجلسة','leave');
+    else if(e.kind==='network') showError(e.message,'مفيش اتصال');
     else showError(e.message||'فشل تحميل الفيديو','تعذّر تحميل الفيديو');
   }
 }
-
 /* ============ INIT ============ */
 async function init(){
   if(!token){
