@@ -855,6 +855,17 @@ function esc(s){
   return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
+// Allow only web-safe thumbnail URLs; reject javascript:, data:, file:, and other schemes.
+function safeThumbUrl(value){
+  const raw=String(value??'').trim();
+  if(!raw)return '';
+  if(raw.startsWith('/')&&!raw.startsWith('//'))return raw;
+  try{
+    const url=new URL(raw,location.href);
+    return url.protocol==='https:'||url.protocol==='http:'?url.href:'';
+  }catch{return ''}
+}
+
 /* ============ ICONS ============ */
 const SVG_PLAY='<svg class="f" viewBox="0 0 24 24"><path d="M8 5.5v13l11-6.5z"/></svg>';
 const SVG_PAUSE='<svg class="f" viewBox="0 0 24 24"><rect x="6.5" y="5" width="3.8" height="14" rx="1"/><rect x="13.7" y="5" width="3.8" height="14" rx="1"/></svg>';
@@ -903,7 +914,7 @@ function renderList(){
   }
   list.innerHTML=filtered.map(({v,i,p})=>{
     const s=statusOf(p),active=i===current;
-    const th=v.thumbnail?`<img src="${esc(v.thumbnail)}" alt="" loading="lazy" onerror="this.remove()">`:'';
+    const th=v.thumbnail?`<img src="${esc(safeThumbUrl(v.thumbnail))}" alt="" loading="lazy" onerror="this.remove()">`:'';
     const art=active?'<span class="eq"><i></i><i></i><i></i></span>':'<span class="pl2"><svg viewBox="0 0 24 24"><path d="M8 5.5v13l11-6.5z"/></svg></span>';
     return `<div class="item${active?' active':''}${s.done?' done':''}" data-i="${i}" tabindex="0" role="button" aria-label="${esc(v.title)}">
       <div class="thumb">${th}${art}<span class="num">${s.done?'✓':i+1}</span><span class="duration">${fmt(v.duration)}</span><div class="mini"><i style="width:${s.done?100:s.pct}%"></i></div></div>
@@ -1842,7 +1853,7 @@ $('skipBtn').onclick=()=>{
 let drawQuery='';
 function itemHTML(v,i,p){
   const s=statusOf(p),active=i===current;
-  const th=v.thumbnail?`<img src="${esc(v.thumbnail)}" alt="" loading="lazy" onerror="this.remove()">`:'';
+  const th=v.thumbnail?`<img src="${esc(safeThumbUrl(v.thumbnail))}" alt="" loading="lazy" onerror="this.remove()">`:'';
   const art=active?'<span class="eq"><i></i><i></i><i></i></span>':'<span class="pl2"><svg viewBox="0 0 24 24"><path d="M8 5.5v13l11-6.5z"/></svg></span>';
   return `<div class="item${active?' active':''}${s.done?' done':''}" data-i="${i}" tabindex="0" role="button" aria-label="${esc(v.title)}">
       <div class="thumb">${th}${art}<span class="num">${s.done?'✓':i+1}</span><span class="duration">${fmt(v.duration)}</span><div class="mini"><i style="width:${s.done?100:s.pct}%"></i></div></div>
@@ -2148,7 +2159,7 @@ async function loadVariants(){
 }
 
 function vidCard(title,thumb,sub){
-  return `<div class="dl-vid"><div class="dl-th">${thumb?`<img src="${esc(thumb)}" alt="" onerror="this.remove()">`:''}</div><div class="dl-vt"><b>${esc(title)}</b><span>${sub}</span></div></div>`;
+  return `<div class="dl-vid"><div class="dl-th">${thumb?`<img src="${esc(safeThumbUrl(thumb))}" alt="" onerror="this.remove()">`:''}</div><div class="dl-vt"><b>${esc(title)}</b><span>${sub}</span></div></div>`;
 }
 function othersHTML(){
   const rows=[];
