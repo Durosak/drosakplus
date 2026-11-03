@@ -1348,7 +1348,11 @@ async function playIndex(i,autoplay){
       video.play().catch(()=>{});
     }else{
       if(!manifestPath) throw new Error('السيرفر لم يرجّع manifest_url أو play_url');
-      const manifestUrl = /^https?:\/\//i.test(manifestPath) ? manifestPath : new URL(manifestPath, API).href;
+      let manifestUrl = /^https?:\/\//i.test(manifestPath) ? manifestPath : new URL(manifestPath, API).href;
+      // Native HLS (Safari/iOS) cannot set Authorization headers; the backend accepts this session token query.
+      if(token && manifestUrl.indexOf(API)===0 && !/[?&]token=/.test(manifestUrl)) {
+        manifestUrl += (manifestUrl.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(token);
+      }
       const savedForManifest = readProgress(item.id);
       const resumeForManifest = savedForManifest && savedForManifest.currentTime > 2 && !savedForManifest.watched ? +savedForManifest.currentTime : 0;
       curManifest={url:manifestUrl,title:item.title,id:item.id,sessionId:s.session||null,swVideoId:s.video_id||s.sw_video_id||null};
@@ -1974,7 +1978,7 @@ async function refreshManifest(id){
   const r=await api('/api/play/'+encodeURIComponent(id),{method:'POST'});
   if(!r||!r.success||!r.data||!r.data.manifest_url)throw new Error('تعذّر تجديد رابط الفيديو');
   let url=new URL(r.data.manifest_url,API).href;
-  if(token)url+=(url.includes('?')?'&':'?')+'token='+encodeURIComponent(token);
+  if(token && !/[?&]token=/.test(url))url+=(url.includes('?')?'&':'?')+'token='+encodeURIComponent(token);
   return url;
 }
 
